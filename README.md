@@ -10,13 +10,16 @@ For each hive, this pipeline:
 
 ## Install
 
-<!-- [![](https://www.singularity-hub.org/static/img/hosted-singularity--hub-%23e32929.svg)](https://singularity-hub.org/collections/3839)
- -->
+[![https://www.singularity-hub.org/static/img/hosted-singularity--hub-%23e32929.svg](https://www.singularity-hub.org/static/img/hosted-singularity--hub-%23e32929.svg)](https://singularity-hub.org/collections/5020)
 
-Use the singularity container hosted on [Singularity hub](https://singularity-hub.org/collections/3839). The container provides:
+Use the singularity container hosted on [Singularity hub](https://singularity-hub.org/collections/5020). The container provides:
 
 ```
-stuff
+whatshap
+samtools
+bcftools
+minimap2
+tabix
 ```
 
 If you have the above dependencies installed, you can install the pipeline with `pip3`:

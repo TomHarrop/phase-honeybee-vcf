@@ -15,18 +15,19 @@ For each hive, this pipeline:
 Install
 -------
 
-.. raw:: html
-
-   <!-- [![](https://www.singularity-hub.org/static/img/hosted-singularity--hub-%23e32929.svg)](https://singularity-hub.org/collections/3839)
-    -->
+|https://www.singularity-hub.org/static/img/hosted-singularity–hub-%23e32929.svg|
 
 Use the singularity container hosted on `Singularity
-hub <https://singularity-hub.org/collections/3839>`__. The container
+hub <https://singularity-hub.org/collections/5020>`__. The container
 provides:
 
 ::
 
-   stuff
+   whatshap
+   samtools
+   bcftools
+   minimap2
+   tabix
 
 If you have the above dependencies installed, you can install the
 pipeline with ``pip3``:
@@ -76,4 +77,6 @@ Graph
 
 |image1|
 
+.. |https://www.singularity-hub.org/static/img/hosted-singularity–hub-%23e32929.svg| image:: https://www.singularity-hub.org/static/img/hosted-singularity--hub-%23e32929.svg
+   :target: https://singularity-hub.org/collections/5020
 .. |image1| image:: graph.svg
