@@ -1,0 +1,416 @@
+#!/usr/bin/env python3
+
+from pathlib import Path
+import pandas
+import shutil
+import tempfile
+import logging
+
+#############
+# FUNCTIONS #
+#############
+
+def get_hive_pool(wildcards):
+    return(
+        subset_data.loc[
+            (subset_data['hive'] == wildcards.indiv) &
+            (subset_data['type'] == 'pool')].index.values[0]
+        )
+
+
+def sample_list(wildcards):
+    my_samples = sorted(set(subset_data.loc[
+        subset_data['type'] == wildcards.set].index))
+    return(','.join(my_samples))
+
+
+###########
+# GLOBALS #
+###########
+
+samtools = 'shub://TomHarrop/align-utils:samtools_1.10'
+minimap = 'shub://TomHarrop/align-utils:minimap2_2.17r941'
+whatshap = 'shub://TomHarrop/variant-utils:whatshap_491ec8e'
+
+# get config
+# configfile: 'config.yaml' # get path from entry point
+ref = config['ref']
+outdir = config['outdir']
+max_threads = config['threads']
+samples_csv = config['samples_csv']
+bam = config['bam']
+vcf = config['vcf']
+outdir = Path(config['outdir'])
+
+# hard code for testing
+# ref = 'data/GCF_003254395.2_Amel_HAv3.1_genomic.fna'
+# bam = 'data/gt_output/merged.bam'
+
+# max_threads = 8
+# samples_csv = 'data/samples.csv'
+# vcf = 'data/filtered.vcf.gz'
+# outdir = Path('output')
+
+# set up directories
+logdir = Path(outdir, 'logs')
+tmpdir = Path(outdir, 'tmp')
+
+# work out which indivs we need
+sample_data = pandas.read_csv(samples_csv,
+                              index_col='sample')
+
+all_pool_samples = set(
+    sample_data.loc[sample_data['type'] == 'pool', 'hive'])
+
+all_drone_samples = set(
+    sample_data.loc[sample_data['type'] == 'drone', 'hive'])
+
+# these are the hives that have a drone and a pool
+both_samples = sorted(all_pool_samples & all_drone_samples)
+subset_data = sample_data.loc[[x in both_samples for x in sample_data['hive']]]
+
+drones = sorted(set(subset_data.loc[subset_data['type'] == 'drone'].index))
+pools = sorted(set(subset_data.loc[subset_data['type'] == 'pool'].index))
+
+# get from fai
+chrs = ['NC_037640.1']
+
+
+#########
+# RULES #
+#########
+
+onsuccess:
+    try:
+        logging.info(f'Removing temporary files from {tmpdir}')
+        logging.info('This can take a while...')
+        shutil.rmtree(tmpdir)
+        logging.info('...done')
+    except FileNotFoundError as e:
+        logging.info(e)
+        logging.info(f'Hopefully this means {tmpdir} '
+                     'was already removed when the pipeline finished :S')
+
+
+rule target:
+    input:
+        Path(outdir, 'phased.vcf.gz')
+
+
+# join the phased vcfs
+rule concat:
+    input:
+        expand(Path(outdir, 'whatshap', '{chr}.vcf.gz'),
+               chr=chrs)
+    output:
+        temp(Path(outdir, 'phased.vcf'))
+    log:
+        Path(logdir, 'concat.log')
+    container:
+        samtools
+    shell:
+        'bcftools concat '
+        '{input} '
+        '>>{output} '
+        '2> {log}'
+
+# run the phasing algorithm
+rule phase:
+    input:
+        pool_vcf = Path(
+            outdir, 'processed_for_whatshap', 'pool', '{chr}.vcf.gz'),
+        pool_bam = Path(
+            outdir, 'processed_for_whatshap', 'pool', '{chr}.bam'),
+        pool_bai = Path(
+            outdir, 'processed_for_whatshap', 'pool', '{chr}.bam.bai'),
+        drone_bam = Path(
+            outdir, 'processed_for_whatshap', 'drone', '{chr}.bam'),
+        drone_bai = Path(
+            outdir, 'processed_for_whatshap', 'drone', '{chr}.bam.bai'),
+        ref = ref
+    output:
+        temp(Path(outdir, 'whatshap', '{chr}.vcf'))
+    log:
+        Path(logdir, 'phase.{chr}.log')
+    container:
+        whatshap
+    shell:
+        'whatshap phase '
+        '--reference {input.ref} '
+        '-o {output} '
+        '{input.pool_vcf} '
+        '{input.drone_bam} '
+        '{input.pool_bam} '
+        '&>{log}'
+
+# re-combine bams for drones and pools
+rule merge_bam:
+    input:
+        expand(Path(outdir, 'indivs', '{{type}}', '{indiv}', '{{chr}}.bam'),
+               indiv=both_samples)
+    output:
+        Path(outdir, 'processed_for_whatshap', '{type}', '{chr}.bam')
+    log:
+        Path(logdir, 'merge_bam.{type}.{chr}.log')
+    container:
+        samtools
+    shell:
+        'samtools merge {output} {input} 2>{log}'
+
+# re-combine the renamed pool vcf per chromosome
+rule sort_pool_vcf:
+    input:
+        Path(tmpdir, 'pool', '{chr}.vcf')
+    output:
+        temp(Path(outdir, 'processed_for_whatshap', 'pool', '{chr}.vcf'))
+    log:
+        Path(logdir, 'sort_pool_vcf.{chr}.log')
+    container:
+        samtools
+    shell:
+        'bcftools sort '
+        '--temp-dir ' + tempfile.mkdtemp() + ' '
+        '{input} '
+        '>{output} '
+        '2>{log}'
+
+rule merge_pool_vcf:
+    input:
+        expand(Path(outdir, 'indivs', 'pool', '{indiv}', '{{chr}}.vcf.gz'),
+               indiv=both_samples)
+    output:
+        temp(Path(tmpdir, 'pool', '{chr}.vcf'))
+    log:
+        Path(logdir, 'merge_pool_vcf.{chr}.log')
+    container:
+        samtools
+    shell:
+        'bcftools merge '
+        '-O v '
+        '{input} '
+        '>>{output} '
+        '2>{log}'
+
+
+# get the reads for the pools and rename them
+rule rename_bam:
+    input:
+        Path(outdir, 'indivs', 'pool', '{indiv}', '{chr}.sam')
+    output:
+        temp(Path(outdir, 'indivs', 'pool', '{indiv}', '{chr}.bam'))
+    container:
+        samtools
+    shell:
+        'samtools addreplacerg '
+        '-r "ID:{wildcards.indiv}" '
+        '-r "SM:{wildcards.indiv}" '
+        '-O BAM '
+        '{input} '
+        '> {output}'
+
+
+rule extract_pool_bam:
+    input:
+        bam = bam
+    output:
+        pipe(Path(outdir, 'indivs', 'pool', '{indiv}', '{chr}.sam'))
+    log:
+        Path(logdir, 'extract_pool_bam.{indiv}.{chr}.log')
+    params:
+        query = get_hive_pool
+    container:
+        samtools
+    shell:
+        'samtools view -h '
+        '-r {params.query} '
+        '{input.bam} '
+        '{wildcards.chr} '
+        '>>{output} '
+        '2>{log}'
+
+
+# map the consensus reads to the genome
+rule sam_to_bam:
+    input:
+        Path(outdir, 'indivs', 'drone', '{indiv}', '{chr}.sam')
+    output:
+        bam = temp(Path(outdir, 'indivs', 'drone', '{indiv}', '{chr}.bam')),
+    container:
+        samtools
+    shell:
+        'samtools view -bh {input} '
+        '| samtools sort '
+        '> {output.bam} '
+
+rule map_read:
+    input:
+        ref = ref,
+        read = Path(outdir, 'indivs', 'drone', '{indiv}', '{chr}.fa')
+    output:
+        pipe(Path(outdir, 'indivs', 'drone', '{indiv}', '{chr}.sam'))
+    log:
+        Path(logdir, 'map_read.{indiv}.{chr}.log')
+    params:
+        rg = lambda wildcards: f'@RG\\tID:{wildcards.indiv}\\tSM:{wildcards.indiv}'
+    container:
+        minimap
+    shell:
+        'minimap2 '
+        '-ax asm5 '
+        '-R \'{params.rg}\' '
+        '{input.ref} '
+        '{input.read} '
+        '>>{output} '
+        '2>{log}'
+
+
+# generate a consensus sequence for each individual drone
+rule rename_read:
+    input:
+        Path(tmpdir, 'indivs', 'drone', '{indiv}', '{chr}.fa')
+    output:
+        temp(Path(outdir, 'indivs', 'drone', '{indiv}', '{chr}.fa'))
+    params:
+        query = lambda wildcards: f's/>{wildcards.chr}/>{wildcards.indiv}/g'
+    container:
+        samtools
+    shell:
+        'sed '
+        '\'{params.query}\' '
+        '{input} '
+        '>{output}'
+
+rule consensus:
+    input:
+        vcf = Path(outdir, 'indivs', 'drone', '{indiv}.vcf.gz'),
+        ref = ref
+    output:
+        temp(Path(tmpdir, 'indivs', 'drone', '{indiv}', '{chr}.fa'))
+    log:
+        Path(logdir, 'consensus.{indiv}.{chr}.log')
+    container:
+        samtools
+    shell:
+        'samtools faidx {input.ref} {wildcards.chr} '
+        '| '
+        'bcftools consensus '
+        '{input.vcf} '
+        '>{output} '
+        '2>{log}'
+
+
+# split the VCFs per-hive or per-chr
+rule indiv_vcf:
+    input:
+        Path(outdir, 'renamed', 'drone.vcf.gz')
+    output:
+        temp(Path(outdir, 'indivs', 'drone', '{indiv}.vcf'))
+    log:
+        Path(logdir, 'indiv_vcf.{indiv}.log')
+    container:
+        samtools
+    shell:
+        'bcftools view -s {wildcards.indiv} '
+        '{input} '
+        '> {output} '
+        '2> {log}'
+
+rule pool_vcf:
+    input:
+        Path(outdir, 'renamed', 'pool.vcf.gz')
+    output:
+        temp(Path(outdir, 'indivs', 'pool', '{indiv}', '{chr}.vcf'))
+    log:
+        Path(logdir, 'pool_vcf.{indiv}.{chr}.log')
+    container:
+        samtools
+    shell:
+        'bcftools view '
+        '-s {wildcards.indiv} '
+        '-r {wildcards.chr} '
+        '{input} '
+        '>{output} '
+        '2>{log}'
+
+
+# mung the VCFs
+rule reheader_vcf:
+    input:
+        vcf = Path(outdir, 'split/{set}.vcf.gz'),
+        headers = Path(tmpdir, 'header.txt')
+    output:
+        temp(Path(outdir, 'renamed', '{set}.vcf'))
+    log:
+        Path(logdir, 'reheader_vcf.{set}.log')
+    container:
+        samtools
+    shell:
+        'bcftools reheader '
+        '-s {input.headers} '
+        '{input.vcf} '
+        '2>{log} '
+        '| bcftools view >{output} 2>>{log} '
+
+
+rule header_file:
+    input:
+        samples_csv
+    output:
+        temp(Path(tmpdir, 'header.txt'))
+    shell:
+        'tail -n +2 {input} '
+        '| '
+        'cut -d\',\' -f2,1 --output-delimiter \' \' '
+        '>{output}'
+
+rule split_vcf:
+    input:
+        vcf = vcf,
+    output:
+        temp(Path(outdir, 'split', '{set}.vcf'))
+    log:
+        Path(logdir, 'split_vcf.{set}.log')
+    params:
+        sample_list = sample_list
+    container:
+        samtools
+    shell:
+        'bcftools view '
+        '-s {params.sample_list} '
+        '{input.vcf} '
+        '> {output} '
+        '2> {log}'
+
+
+############
+# GENERICS #
+############
+
+rule index_vcf:
+    input:
+        Path('{path}', '{file}.vcf')
+    output:
+        gz = Path('{path}', '{file}.vcf.gz'),
+        tbi = Path('{path}', '{file}.vcf.gz.tbi'),
+    log:
+        Path(logdir, 'index_vcf', '{path}', '{file}.log')
+    singularity:
+        samtools
+    shell:
+        'bgzip -c {input} > {output.gz} 2> {log} '
+        '; '
+        'tabix -p vcf {output.gz} 2>> {log}'
+
+rule index_bamfile:
+    input:
+        Path('{path}', '{file}.bam')
+    output:
+        Path('{path}', '{file}.bam.bai')
+    log:
+        Path(logdir, 'index_bamfile', '{path}', '{file}.log')
+    threads:
+        2
+    singularity:
+        samtools
+    shell:
+        'samtools index -@ {threads} {input} 2> {log}'
