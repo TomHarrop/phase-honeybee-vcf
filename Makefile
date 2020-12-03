@@ -14,10 +14,9 @@ graph.svg: phase_honeybee_vcf/Snakefile
 	vcf=data/filtered.vcf.gz \
 	samples_csv=data/samples.csv \
 	ref=data/GCF_003254395.2_Amel_HAv3.1_genomic.fna \
+ 	| grep -v "^[[:space:]+]0" | grep -v "\->[[:space:]]0" \
 	| dot -Tsvg \
 	> graph.svg
-
-# 	| grep -v "^[[:space:]+]0" | grep -v "\->[[:space:]]0" \
 
 readme: README.rst
 

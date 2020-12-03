@@ -12,7 +12,7 @@ def readme():
 
 setup(
     name='phase_honeybee_vcf',
-    version='0.0.1',
+    version='0.0.2',
     description='python3 wrapper for phasing pools with single drone',
     long_description=readme(),
     url='https://github.com/tomharrop/phase-honeybee-vcf',
