@@ -2,10 +2,10 @@ Bootstrap: docker
 From: python:3.8.6-buster
 
 %help
-    Container for phase-honeybee-vcf v0.0.1
+    Container for phase-honeybee-vcf v0.0.2
 
 %labels
-    VERSION "phase-honeybee-vcf v0.0.1"
+    VERSION "phase-honeybee-vcf v0.0.2"
     MAINTAINER "Tom Harrop"
 
 %post
@@ -33,7 +33,7 @@ From: python:3.8.6-buster
 
     /usr/local/bin/python3 -m pip \
         install \
-        git+git://github.com/tomharrop/phase-honeybee-vcf.git@v0.0.1
+        git+git://github.com/tomharrop/phase-honeybee-vcf.git@v0.0.2
 
 %runscript
     exec /usr/local/bin/phase_honeybee_vcf "$@"
